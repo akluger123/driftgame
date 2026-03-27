@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drift Hunters: S-Track Edition</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+    <style>
+        body { margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #1a1a1a; color: white; font-family: 'Arial', sans-serif; overflow: hidden; }
+        canvas { border: 4px solid #444; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        .ui-panel { position: absolute; background: rgba(0,0,0,0.85); padding: 20px; border-radius: 10px; border: 2px solid #00ff00; text-align: center; z-index: 100; }
+        .login-box { width: 300px; }
+        input { display: block; width: 80%; margin: 10px auto; padding: 10px; background: #222; border: 1px solid #0f0; color: #0f0; }
+        .button { background: linear-gradient(135deg, #00ff00, #00cc00); color: #000; border: none; padding: 12px 30px; margin: 10px; border-radius: 5px; cursor: pointer; font-size: 16px; font-weight: bold; transition: all 0.3s; }
+        .button:hover { transform: scale(1.05); background: #00ff66; }
+        #hud { position: absolute; top: 20px; left: 20px; pointer-events: none; text-align: left; }
+        .money-text { color: #00ff00; font-size: 24px; font-weight: bold; text-shadow: 2px 2px #000; }
+    </style>
+</head>
+<body>
+
+<div id="login-menu" class="ui-panel login-box">
+    <h1 style="color:#0f0">DRIFT PRO</h1>
+    <input type="text" id="user" placeholder="Username">
+    <input type="password" id="pass" placeholder="Password">
+    <button class="button" onclick="login()">LOGIN</button>
+</div>
+
+<div id="hud" style="display:none">
+    <div class="money-text" id="money-val">$0</div>
+    <div style="font-size:12px">P to Pause | Reach the Green Line</div>
+</div>
+
+<script>
+const GAME_STATE = { MENU: 'menu', PLAYING: 'playing', GARAGE: 'garage', SHOP: 'shop' };
+const CARS = {
+    'Red Pro': { color: [200, 30, 30], speed: 0.35, drift: 0.85, price: 0, isGTR: false },
+    'Nissan GT-R': { color: [140, 140, 150], speed: 0.45, drift: 0.80, price: 500, isGTR: true }
+};
+
+let state = GAME_STATE.MENU;
+let car, currentCar = 'Red Pro', money = 0;
+let unlockedCars = ['Red Pro'];
+let camX = 0, camY = 0;
+let trackPoints = [];
+let cones = [];
+let skidMarks = [];
+
+function setup() {
+    createCanvas(1000, 600);
+    noLoop();
+}
+
+function login() {
+    let u = document.getElementById('user').value;
+    let p = document.getElementById('pass').value;
+    if(u === 'car' && p === 'ami') { money = 999999; startGame(); }
+    else if(u === '1' && p === '1') { money = 0; startGame(); }
+    else alert("Invalid Login");
+}
+
+function startGame() {
+    document.getElementById('login-menu').style.display = 'none';
+    document.getElementById('hud').style.display = 'block';
+    state = GAME_STATE.MENU;
+    loop();
+}
+
+function initLevel(type) {
+    car = new Drifter(0, 0, CARS[currentCar]);
+    trackPoints = [];
+    cones = [];
+    skidMarks = [];
+    
+    if (type === 'S-TRACK') {
+        // Generate a long winding S path
+        for(let i=0; i<15; i++) {
+            trackPoints.push({ x: i * 600, y: Math.sin(i * 0.8) * 800 });
+        }
+    } else {
+        // Open Expert World
+        for(let i=0; i<50; i++) cones.push(createVector(random(-2000, 2000), random(-2000, 2000)));
+    }
+    state = GAME_STATE.PLAYING;
+}
+
+function draw() {
+    background(25);
+    
+    if (state === GAME_STATE.MENU) drawMenu();
+    else if (state === GAME_STATE.SHOP) drawShop();
+    else if (state === GAME_STATE.PLAYING) drawGame();
+}
+
+function drawMenu() {
+    textAlign(CENTER); fill(0, 255, 0); textSize(40);
+    text("DRIFT HUNTERS PRO", width/2, 150);
+    drawBtn(width/2, 280, "LONG S-TRACK", () => initLevel('S-TRACK'));
+    drawBtn(width/2, 360, "EXPERT OPEN WORLD", () => initLevel('OPEN'));
+    drawBtn(width/2, 440, "CAR SHOP", () => state = GAME_STATE.SHOP);
+}
+
+function drawShop() {
+    textAlign(CENTER); fill(0, 255, 0); textSize(30);
+    text("VEHICLE SHOP", width/2, 80);
+    let x = width/2 - 150;
+    for (let name in CARS) {
+        let c = CARS[name];
+        let owned = unlockedCars.includes(name);
+        fill(owned ? 50 : 20); stroke(0,255,0); rect(x, 150, 140, 200, 5);
+        noStroke(); fill(255); textSize(14); text(name, x+70, 180);
+        text(owned ? "OWNED" : "$" + c.price, x+70, 320);
+        if(mouseIsPressed && mouseX > x && mouseX < x+140 && mouseY > 150 && mouseY < 350) {
+            if(owned) currentCar = name;
+            else if(money >= c.price) { money -= c.price; unlockedCars.push(name); currentCar = name; }
+        }
+        x += 160;
+    }
+    drawBtn(width/2, 500, "BACK", () => state = GAME_STATE.MENU);
+}
+
+function drawGame() {
+    camX = lerp(camX, car.pos.x - width/2, 0.1);
+    camY = lerp(camY, car.pos.y - height/2, 0.1);
+    
+    push();
+    translate(-camX, -camY);
+    
+    // Grid Background
+    stroke(255, 10);
+    for(let i=-2000; i<8000; i+=200) { line(i, -2000, i, 2000); line(-2000, i, 8000, i); }
+
+    if (trackPoints.length > 0) drawSPath();
+    else drawCones();
+
+    for(let s of skidMarks) { s.display(); s.life--; }
+    skidMarks = skidMarks.filter(s => s.life > 0);
+
+    car.update();
+    car.display();
+    pop();
+    
+    document.getElementById('money-val').innerText = "$" + floor(money);
+}
+
+function drawSPath() {
+    noFill(); stroke(60); strokeWeight(400);
+    beginShape();
+    for(let p of trackPoints) curveVertex(p.x, p.y);
+    endShape();
+    
+    stroke(255, 0, 0, 100); strokeWeight(430); // Red Borders
+    beginShape();
+    for(let p of trackPoints) curveVertex(p.x, p.y);
+    endShape();
+
+    // Finish Line
+    let last = trackPoints[trackPoints.length-1];
+    fill(0, 255, 0); noStroke(); rect(last.x, last.y - 200, 50, 400);
+
+    // Track Reset Logic
+    let safe = false;
+    for(let p of trackPoints) if(dist(car.pos.x, car.pos.y, p.x, p.y) < 400) safe = true;
+    if(!safe) car.reset();
+}
+
+function drawCones() {
+    for(let c of cones) {
+        fill(255, 100, 0); stroke(255); triangle(c.x, c.y-30, c.x-20, c.y+20, c.x+20, c.y+20);
+        if(dist(car.pos.x, car.pos.y, c.x, c.y) < 50) car.reset();
+    }
+}
+
+class Drifter {
+    constructor(x, y, data) {
+        this.pos = createVector(x, y);
+        this.vel = createVector(0, 0);
+        this.angle = 0;
+        this.data = data;
+        this.friction = 0.99; // Higher = easier to keep momentum
+    }
+    reset() { this.pos.set(0,0); this.vel.mult(0); }
+    update() {
+        if(keyIsDown(UP_ARROW) || keyIsDown(87)) this.vel.add(p5.Vector.fromAngle(this.angle).mult(this.data.speed));
+        if(keyIsDown(LEFT_ARROW) || keyIsDown(65)) this.angle -= 0.08;
+        if(keyIsDown(RIGHT_ARROW) || keyIsDown(68)) this.angle += 0.08;
+
+        let forward = p5.Vector.fromAngle(this.angle);
+        let lateral = p5.Vector.fromAngle(this.angle + HALF_PI);
+        let fSpeed = this.vel.dot(forward);
+        let lSpeed = this.vel.dot(lateral);
+
+        this.vel = forward.mult(fSpeed).add(lateral.mult(lSpeed * this.data.drift));
+        this.vel.mult(this.friction);
+        this.pos.add(this.vel);
+
+        if(abs(lSpeed) > 0.6) {
+            money += 0.2;
+            skidMarks.push(new Skid(this.pos.x, this.pos.y, this.angle));
+        }
+    }
+    display() {
+        push(); translate(this.pos.x, this.pos.y); rotate(this.angle);
+        if(this.data.isGTR) {
+            fill(120); rect(-22, -11, 44, 22, 2); // Body
+            fill(255, 0, 0); ellipse(-18, -6, 5, 5); ellipse(-18, 6, 5, 5); // GTR Lights
+            fill(0); rect(0, -8, 15, 16); // Windows
+        } else {
+            fill(this.data.color); rect(-20, -10, 40, 20, 3);
+        }
+        pop();
+    }
+}
+
+class Skid {
+    constructor(x, y, a) { this.x = x; this.y = y; this.a = a; this.life = 180; }
+    display() {
+        push(); translate(this.x, this.y); rotate(this.a);
+        fill(0, map(this.life, 0, 180, 0, 100)); noStroke();
+        rect(-15, -8, 12, 4); rect(-15, 8, 12, 4);
+        pop();
+    }
+}
+
+function drawBtn(x, y, t, act) {
+    let h = mouseX > x-120 && mouseX < x+120 && mouseY > y-25 && mouseY < y+25;
+    fill(h ? 0 : 20, 200, 0); rect(x-120, y-25, 240, 50, 5);
+    fill(0); textSize(16); text(t, x, y+7);
+    if(h && mouseIsPressed) act();
+}
+
+function keyPressed() { if(key === 'p') state = GAME_STATE.MENU; }
+</script>
+</body>
+</html>
