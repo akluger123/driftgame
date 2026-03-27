@@ -1,1 +1,245 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drift Hunters: Modular Pro</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+    <style>
+        /* #CSS_STYLES */
+        body { margin: 0; padding: 0; background: #050505; overflow: hidden; font-family: monospace; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        .overlay { 
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.95); padding: 40px; border: 2px solid #00ff00;
+            border-radius: 5px; text-align: center; pointer-events: all;
+            box-shadow: 0 0 30px rgba(0, 255, 0, 0.2);
+        }
+        input { display: block; width: 250px; margin: 10px auto; padding: 12px; background: #111; border: 1px solid #00ff00; color: #00ff00; }
+        button { 
+            background: #00ff00; color: #000; border: none; padding: 12px 30px; 
+            font-weight: bold; cursor: pointer; width: 100%; margin-top: 10px;
+        }
+        .guest-btn { background: #444; color: #fff; margin-top: 15px; }
+    </style>
+</head>
+<body>
+
+<div id="ui-layer">
+    <div id="login-screen" class="overlay">
+        <h1 style="color:#00ff00;">DRIFT PRO</h1>
+        <input type="text" id="username" placeholder="USERNAME">
+        <input type="password" id="password" placeholder="PASSWORD">
+        <button onclick="attemptLogin()">LOGIN</button>
+        <button class="guest-btn" onclick="guestLogin()">GUEST ACCESS</button>
+    </div>
+</div>
+
+<script>
+// #GLOBAL_SETTINGS
+const SETTINGS = {
+    FRICTION: 0.99,
+    TRACK_WIDTH: 450,
+    CAMERA_LERP: 0.08,
+    SKID_LIFE: 180
+};
+
+// #CAR_DATA
+const CAR_CATALOG = {
+    'Red Pro': { name: 'Red Pro', color: [220, 30, 30], speed: 0.35, driftGrip: 0.82, price: 0, isGTR: false },
+    'Nissan GT-R': { name: 'Nissan GT-R', color: [180, 180, 185], speed: 0.45, driftGrip: 0.78, price: 500, isGTR: true }
+};
+
+// #GAME_VARIABLES
+let gameState = 'LOGIN', userMoney = 0, myCar, currentCarModel = 'Red Pro', ownedCars = ['Red Pro'];
+let cameraPos, skidMarks = [], particles = [], trackNodes = [], worldObstacles = [], currentMapType = 'TRACK';
+
+// #CORE_SYSTEM
+function setup() {
+    createCanvas(windowWidth, windowHeight);
+    cameraPos = createVector(0, 0);
+    rectMode(CENTER);
+    noLoop();
+}
+
+function attemptLogin() {
+    const u = document.getElementById('username').value;
+    const p = document.getElementById('password').value;
+    if (u === 'car' && p === 'ami') { userMoney = 999999; initGame(); }
+    else if (u === '1' && p === '1') { userMoney = 0; initGame(); }
+    else alert("WRONG LOGIN");
+}
+
+function guestLogin() {
+    userMoney = 100; // Small starter bonus for guests
+    initGame();
+}
+
+function initGame() {
+    document.getElementById('login-screen').style.display = 'none';
+    gameState = 'MENU';
+    loop();
+}
+
+// #MAIN_LOOP
+function draw() {
+    background(10);
+    if (gameState === 'MENU') renderMenu();
+    else if (gameState === 'SHOP') renderShop();
+    else if (gameState === 'PLAYING') runSimulation();
+}
+
+// #SIMULATION_ENGINE
+function runSimulation() {
+    cameraPos.x = lerp(cameraPos.x, myCar.pos.x - width / 2, SETTINGS.CAMERA_LERP);
+    cameraPos.y = lerp(cameraPos.y, myCar.pos.y - height / 2, SETTINGS.CAMERA_LERP);
+
+    push();
+    translate(-cameraPos.x, -cameraPos.y);
+    drawWorld();
+    updateEffects();
+    myCar.process();
+    myCar.render();
+    pop();
+    drawHUD();
+}
+
+// #ENVIRONMENT_LOGIC
+function drawWorld() {
+    stroke(255, 10);
+    for (let x = -2000; x < 10000; x += 300) line(x, -2000, x, 5000);
+    for (let y = -2000; y < 5000; y += 300) line(-2000, y, 10000, y);
+
+    if (currentMapType === 'TRACK') {
+        noFill(); stroke(60); strokeWeight(SETTINGS.TRACK_WIDTH);
+        beginShape();
+        for (let n of trackNodes) curveVertex(n.x, n.y);
+        endShape();
+        // Finish Line
+        let f = trackNodes[trackNodes.length-1];
+        fill(0,255,0); rect(f.x, f.y, 50, SETTINGS.TRACK_WIDTH);
+    } else {
+        for (let o of worldObstacles) {
+            fill(255, 120, 0); triangle(o.x, o.y-40, o.x-25, o.y+20, o.x+25, o.y+20);
+        }
+    }
+}
+
+// #CAR_PHYSICS_CLASS
+class Car {
+    constructor(x, y, stats) {
+        this.pos = createVector(x, y);
+        this.vel = createVector(0, 0);
+        this.angle = 0;
+        this.stats = stats;
+    }
+
+    process() {
+        if (keyIsDown(UP_ARROW) || keyIsDown(87)) this.vel.add(p5.Vector.fromAngle(this.angle).mult(this.stats.speed));
+        if (keyIsDown(LEFT_ARROW) || keyIsDown(65)) this.angle -= 0.08;
+        if (keyIsDown(RIGHT_ARROW) || keyIsDown(68)) this.angle += 0.08;
+
+        let forward = p5.Vector.fromAngle(this.angle);
+        let side = p5.Vector.fromAngle(this.angle + HALF_PI);
+        let fSpeed = this.vel.dot(forward);
+        let lSpeed = this.vel.dot(side);
+
+        this.vel = forward.mult(fSpeed).add(side.mult(lSpeed * this.stats.driftGrip));
+        this.vel.mult(SETTINGS.FRICTION);
+        this.pos.add(this.vel);
+
+        if (abs(lSpeed) > 0.7) {
+            userMoney += 0.2;
+            skidMarks.push(new SkidMark(this.pos.x, this.pos.y, this.angle));
+        }
+        this.checkBounds();
+    }
+
+    checkBounds() {
+        if (currentMapType === 'TRACK') {
+            let onTrack = false;
+            for(let n of trackNodes) if(dist(this.pos.x, this.pos.y, n.x, n.y) < SETTINGS.TRACK_WIDTH/2) onTrack = true;
+            if(!onTrack) this.reset();
+        } else {
+            for(let o of worldObstacles) if(dist(this.pos.x, this.pos.y, o.x, o.y) < 50) this.reset();
+        }
+    }
+
+    reset() { this.pos.set(0,0); this.vel.mult(0); this.angle = 0; }
+
+    render() {
+        push(); translate(this.pos.x, this.pos.y); rotate(this.angle);
+        if (this.stats.isGTR) {
+            fill(150); rect(0, 0, 50, 25, 2); 
+            fill(255, 0, 0); ellipse(-20, -8, 6, 6); ellipse(-20, 8, 6, 6);
+        } else {
+            fill(this.stats.color); rect(0, 0, 40, 20, 3);
+        }
+        pop();
+    }
+}
+
+// #EFFECTS_CLASSES
+class SkidMark {
+    constructor(x, y, a) { this.x = x; this.y = y; this.a = a; this.life = SETTINGS.SKID_LIFE; }
+    display() {
+        push(); translate(this.x, this.y); rotate(this.a);
+        noStroke(); fill(0, map(this.life, 0, SETTINGS.SKID_LIFE, 0, 100));
+        rect(-10, -8, 15, 4); rect(-10, 8, 15, 4);
+        pop();
+    }
+}
+
+function updateEffects() {
+    for (let i = skidMarks.length - 1; i >= 0; i--) {
+        skidMarks[i].display();
+        skidMarks[i].life--;
+        if (skidMarks[i].life <= 0) skidMarks.splice(i, 1);
+    }
+}
+
+// #UI_RENDERER
+function renderMenu() {
+    textAlign(CENTER); fill(0, 255, 0); textSize(40); text("GARAGE", width/2, height/4);
+    drawBtn(width/2, height/2 - 40, "S-TRACK", () => { currentMapType = 'TRACK'; genTrack(); start(); });
+    drawBtn(width/2, height/2 + 40, "OPEN WORLD", () => { currentMapType = 'OPEN'; genOpen(); start(); });
+    drawBtn(width/2, height/2 + 120, "SHOP", () => gameState = 'SHOP');
+}
+
+function renderShop() {
+    textAlign(CENTER); fill(0, 255, 0); textSize(30); text("SHOP", width/2, 100);
+    let xOff = width/2 - 110;
+    for (let k in CAR_CATALOG) {
+        let c = CAR_CATALOG[k]; let owned = ownedCars.includes(k);
+        fill(owned ? 40 : 20); stroke(0,255,0); rect(xOff+50, 250, 100, 150);
+        noStroke(); fill(255); textSize(12); text(c.name, xOff+50, 200);
+        if (mouseIsPressed && mouseX > xOff && mouseX < xOff+100 && mouseY > 175 && mouseY < 325) {
+            if (owned) currentCarModel = k;
+            else if (userMoney >= c.price) { userMoney -= c.price; ownedCars.push(k); currentCarModel = k; }
+        }
+        xOff += 120;
+    }
+    drawBtn(width/2, 500, "BACK", () => gameState = 'MENU');
+}
+
+function drawHUD() {
+    textAlign(LEFT); fill(0, 255, 0); textSize(20); text("$" + floor(userMoney), 20, 40);
+}
+
+// #LEVEL_GEN
+function genTrack() { trackNodes = []; for(let i=0; i<20; i++) trackNodes.push(createVector(i*600, sin(i*0.8)*800)); }
+function genOpen() { worldObstacles = []; for(let i=0; i<50; i++) worldObstacles.push(createVector(random(-3000,3000), random(-3000,3000))); }
+function start() { myCar = new Car(0, 0, CAR_CATALOG[currentCarModel]); skidMarks = []; gameState = 'PLAYING'; }
+function drawBtn(x, y, l, a) {
+    let hover = mouseX > x-100 && mouseX < x+100 && mouseY > y-20 && mouseY < y+20;
+    fill(hover ? 100 : 0, 255, 0); rect(x, y, 200, 40);
+    fill(0); noStroke(); text(label = l, x, y+5);
+    if(hover && mouseIsPressed) a();
+}
+
+function keyPressed() { if(key === 'p' || key === 'P') gameState = 'MENU'; }
+function windowResized() { resizeCanvas(windowWidth, windowHeight); }
+</script>
+</body>
+</html>
