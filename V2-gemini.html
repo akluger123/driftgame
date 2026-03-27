@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drift Hunters: Pro Edition</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+    <style>
+        body { margin: 0; background: #111; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+        .ui-overlay { position: absolute; background: rgba(0,0,0,0.9); padding: 30px; border: 2px solid #0f0; border-radius: 10px; text-align: center; width: 400px; }
+        input { display: block; width: 80%; margin: 10px auto; padding: 10px; background: #222; border: 1px solid #0f0; color: #0f0; }
+        button { background: #0f0; color: #000; border: none; padding: 10px 20px; cursor: pointer; font-weight: bold; margin-top: 10px; }
+        button:hover { background: #0c0; }
+        #game-ui { position: absolute; top: 10px; left: 10px; pointer-events: none; }
+    </style>
+</head>
+<body>
+
+<div id="login-screen" class="ui-overlay">
+    <h1>DRIFT PRO</h1>
+    <p>Please Login</p>
+    <input type="text" id="username" placeholder="Username">
+    <input type="password" id="password" placeholder="Password">
+    <button onclick="checkLogin()">START ENGINE</button>
+</div>
+
+<div id="game-ui" style="display:none;">
+    <h2 id="money-display" style="color: #0f0; text-shadow: 2px 2px #000;">$0</h2>
+</div>
+
+<script>
+let gameState = 'LOGIN';
+let userMoney = 0;
+let unlockedCars = ['Red Pro'];
+let currentCar = 'Red Pro';
+let car;
+let cones = [];
+let driftPoints = 0;
+
+const CARS = {
+    'Red Pro': { color: [200, 30, 30], speed: 0.25, drift: 0.96, price: 0, pixel: false },
+    'GT4 Pixel': { color: [255, 255, 255], speed: 0.38, drift: 0.92, price: 500, pixel: true }
+};
+
+const MAPS = {
+    TRACK: 'Curvy Track',
+    OPEN: 'Open Park'
+};
+let currentMap = MAPS.OPEN;
+
+function setup() {
+    let canvas = createCanvas(1000, 600);
+    canvas.hide();
+    noLoop();
+}
+
+function checkLogin() {
+    const user = document.getElementById('username').value;
+    const pass = document.getElementById('password').value;
+
+    if (user === 'car' && pass === 'ami') {
+        userMoney = 999999;
+        startGame();
+    } else if (user === '1' && pass === '1') {
+        userMoney = 0;
+        startGame();
+    } else {
+        alert("Invalid Credentials");
+    }
+}
+
+function startGame() {
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('game-ui').style.display = 'block';
+    gameState = 'MENU';
+    getCanvasElement().style.display = 'block';
+    loop();
+}
+
+function getCanvasElement() { return document.querySelector('canvas'); }
+
+function draw() {
+    background(30);
+    
+    if (gameState === 'MENU') {
+        drawMenu();
+    } else if (gameState === 'SHOP') {
+        drawShop();
+    } else if (gameState === 'PLAYING') {
+        updateGame();
+    }
+}
+
+function drawMenu() {
+    fill(0, 255, 0);
+    textAlign(CENTER);
+    textSize(50);
+    text("MAIN MENU", width/2, 150);
+    
+    textSize(20);
+    text("Current Car: " + currentCar, width/2, 200);
+    
+    drawBtn(width/2, 280, "PLAY TRACK (Borders)", () => { currentMap = MAPS.TRACK; initLevel(); });
+    drawBtn(width/2, 350, "PLAY OPEN (Cones)", () => { currentMap = MAPS.OPEN; initLevel(); });
+    drawBtn(width/2, 420, "GARAGE / SHOP", () => { gameState = 'SHOP'; });
+    
+    document.getElementById('money-display').innerText = "$" + floor(userMoney);
+}
+
+function drawShop() {
+    fill(0, 255, 0);
+    textSize(40);
+    text("THE SHOP", width/2, 100);
+    
+    let x = 200;
+    for (let name in CARS) {
+        let c = CARS[name];
+        let owned = unlockedCars.includes(name);
+        
+        fill(owned ? 100 : 50);
+        rect(x, 200, 150, 200);
+        fill(255);
+        textSize(16);
+        text(name, x + 75, 230);
+        text(owned ? "OWNED" : "$" + c.price, x + 75, 350);
+        
+        if (mouseIsPressed && mouseX > x && mouseX < x+150 && mouseY > 200 && mouseY < 400) {
+            if (owned) {
+                currentCar = name;
+            } else if (userMoney >= c.price) {
+                userMoney -= c.price;
+                unlockedCars.push(name);
+                currentCar = name;
+            }
+        }
+        x += 250;
+    }
+    
+    drawBtn(width/2, 500, "BACK", () => { gameState = 'MENU'; });
+}
+
+function initLevel() {
+    car = new Drifter(width/2, height/2, CARS[currentCar]);
+    cones = [];
+    if (currentMap === MAPS.OPEN) {
+        for(let i=0; i<15; i++) cones.push(createVector(random(100, 900), random(100, 500)));
+    }
+    gameState = 'PLAYING';
+}
+
+function updateGame() {
+    if (currentMap === MAPS.TRACK) {
+        drawTrack();
+    } else {
+        drawOpenMap();
+    }
+    
+    car.update();
+    car.display();
+    
+    // Borders for Track Map
+    if (currentMap === MAPS.TRACK) {
+        if (car.pos.x < 50 || car.pos.x > 950 || car.pos.y < 50 || car.pos.y > 550) {
+            car.pos.set(width/2, height/2);
+            car.vel.mult(0);
+        }
+    }
+
+    document.getElementById('money-display').innerText = "$" + floor(userMoney);
+    
+    fill(255);
+    textSize(15);
+    text("ESC to Menu", 60, height - 20);
+}
+
+function drawTrack() {
+    noFill();
+    stroke(100);
+    strokeWeight(100);
+    // Curvy track shape
+    beginShape();
+    vertex(100, 100);
+    bezierVertex(900, 50, 900, 550, 500, 500);
+    bezierVertex(100, 450, 100, 150, 500, 300);
+    endShape();
+    
+    stroke(0, 255, 0);
+    strokeWeight(5);
+    rect(50, 50, 900, 500, 20); // Border visual
+}
+
+function drawOpenMap() {
+    for (let c of cones) {
+        fill(255, 100, 0);
+        triangle(c.x, c.y-10, c.x-8, c.y+10, c.x+8, c.y+10);
+    }
+}
+
+function drawBtn(x, y, txt, action) {
+    let w = 250;
+    let h = 50;
+    let hover = mouseX > x-w/2 && mouseX < x+w/2 && mouseY > y-h/2 && mouseY < y+h/2;
+    fill(hover ? 100 : 0, 200, 0);
+    rectMode(CENTER);
+    rect(x, y, w, h, 5);
+    fill(0);
+    textSize(20);
+    text(txt, x, y + 7);
+    if (hover && mouseIsPressed) action();
+    rectMode(CORNER);
+}
+
+class Drifter {
+    constructor(x, y, data) {
+        this.pos = createVector(x, y);
+        this.vel = createVector(0, 0);
+        this.angle = 0;
+        this.data = data;
+    }
+
+    update() {
+        if (keyIsDown(UP_ARROW)) {
+            let force = p5.Vector.fromAngle(this.angle).mult(this.data.speed);
+            this.vel.add(force);
+        }
+        if (keyIsDown(LEFT_ARROW)) this.angle -= 0.06;
+        if (keyIsDown(RIGHT_ARROW)) this.angle += 0.06;
+
+        let forward = p5.Vector.fromAngle(this.angle);
+        let side = p5.Vector.fromAngle(this.angle + HALF_PI);
+        
+        let fSpeed = this.vel.dot(forward);
+        let sSpeed = this.vel.dot(side);
+
+        // Money for drifting (lateral velocity)
+        if (abs(sSpeed) > 0.5) {
+            userMoney += 0.5; 
+            this.isDrifting = true;
+        } else {
+            this.isDrifting = false;
+        }
+
+        this.vel = forward.mult(fSpeed).add(side.mult(sSpeed * this.data.drift));
+        this.vel.mult(0.98);
+        this.pos.add(this.vel);
+        
+        // Wrap for open map
+        if (currentMap === MAPS.OPEN) {
+            if (this.pos.x > width) this.pos.x = 0;
+            if (this.pos.x < 0) this.pos.x = width;
+            if (this.pos.y > height) this.pos.y = 0;
+            if (this.pos.y < 0) this.pos.y = height;
+        }
+    }
+
+    display() {
+        push();
+        translate(this.pos.x, this.pos.y);
+        rotate(this.angle);
+        
+        if (this.data.pixel) {
+            // Pixel GT4 style
+            noStroke();
+            fill(50); rect(-20, -10, 40, 20); // Body
+            fill(200); rect(-18, -8, 36, 16); // Upper body
+            fill(0); rect(-5, -7, 12, 14); // Cabin
+            fill(this.data.color); rect(-20, -10, 5, 20); // Front bumper
+            if (this.isDrifting) {
+                fill(255, 100, 0, 150);
+                rect(-25, -12, 10, 4); rect(-25, 8, 10, 4); // Drift sparks
+            }
+        } else {
+            fill(this.data.color);
+            rectMode(CENTER);
+            rect(0, 0, 40, 20, 5);
+        }
+        pop();
+    }
+}
+
+function keyPressed() {
+    if (keyCode === ESCAPE) gameState = 'MENU';
+}
+</script>
+</body>
+</html>
