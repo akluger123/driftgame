@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Car Drifting Game</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            margin: 0;
+            padding: 0;
+        }
+        #login {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-top: 50px;
+        }
+        #game {
+            display: none;
+            position: relative;
+            width: 100%;
+            height: 100vh;
+            background-color: #333;
+        }
+        .car {
+            position: absolute;
+            width: 50px;
+            height: 30px;
+            background-image: url('nissan-gt-r.png');
+            background-size: cover;
+        }
+        .shop {
+            display: none;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="login">
+    <h1>Car Drifting Game</h1>
+    <button onclick="guestLogin()">Guest Login</button>
+    <button onclick="adminLogin()">Admin Login</button>
+</div>
+
+<div id="game">
+    <h2>Welcome to the Drift World!</h2>
+    <div id="car" class="car"></div>
+    <div class="shop">
+        <h3>Shop</h3>
+        <button onclick="buyCar('lamborghini')">Buy Lamborghini</button>
+        <button onclick="buyCar('mustang')">Buy Ford Mustang</button>
+    </div>
+</div>
+
+<script>
+    let money = 0;
+    let currentCar = 'nissan-gt-r';
+    let levelsCompleted = 0;
+
+    function guestLogin() {
+        document.getElementById('login').style.display = 'none';
+        document.getElementById('game').style.display = 'block';
+        document.querySelector('.shop').style.display = 'block';
+        startGame();
+    }
+
+    function adminLogin() {
+        alert('Admin access granted.');
+        // Admin functionalities can be added here
+    }
+
+    function startGame() {
+        // Game initialization logic
+        console.log('Game started');
+    }
+
+    function buyCar(car) {
+        if (money >= 100) {
+            currentCar = car;
+            money -= 100;
+            alert(car + ' purchased!');
+        } else {
+            alert('Not enough money!');
+        }
+    }
+
+    function completeLevel() {
+        levelsCompleted++;
+        money += 50; // Earn money for completing a level
+        alert('Level completed! Money earned: 50');
+    }
+
+    function drift() {
+        // Drift logic
+        console.log('Drifting...');
+        money += 10; // Earn money for drifting
+    }
+
+    // Simulate game levels
+    for (let i = 0; i < 3; i++) {
+        completeLevel();
+    }
+
+    // Simulate drifting
+    for (let j = 0; j < 5; j++) {
+        drift();
+    }
+</script>
+
+</body>
+</html>
