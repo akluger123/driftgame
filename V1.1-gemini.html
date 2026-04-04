@@ -45,30 +45,32 @@
  */
 const SETTINGS = {
     GRAVITY: 9.81,
-    FRICTION: 0.988,        // Air/Rolling resistance
-    DRIFT_INTENSITY: 0.82,  // Lower = more "slippery" sideways
-    MONEY_PER_DRIFT: 0.2,
-    SKID_LIFE: 180,         // Frames (3 seconds)
+    FRICTION: 0.99,         // Air/Rolling resistance
+    DRIFT_INTENSITY: 0.85,  
+    MONEY_PER_DRIFT: 0.5,
+    SKID_LIFE: 200,         
     TRACK_WIDTH: 450,
-    CAMERA_LERP: 0.08
+    CAMERA_LERP: 0.12,
+    LATERAL_FRICTION: 0.92, // Side grip
+    LONGITUDINAL_FRICTION: 0.99 // Forward grip
 };
 
 const CAR_CATALOG = {
     'Red Pro': {
         name: 'Red Pro',
         color: [220, 30, 30],
-        speed: 0.32,
-        handling: 0.075,
-        driftGrip: 0.84,
+        speed: 0.35,
+        handling: 0.08,
+        driftFactor: 0.94, // How much grip is lost sideways
         price: 0,
         isGTR: false
     },
     'Nissan GT-R': {
         name: 'Nissan GT-R R35',
         color: [180, 180, 185],
-        speed: 0.44,
-        handling: 0.085,
-        driftGrip: 0.79, // Extra drifty
+        speed: 0.48,
+        handling: 0.095,
+        driftFactor: 0.91, 
         price: 500,
         isGTR: true
     }
@@ -98,7 +100,7 @@ function setup() {
     cameraPos = createVector(0, 0);
     rectMode(CENTER);
     imageMode(CENTER);
-    noLoop(); // Wait for login
+    noLoop();
 }
 
 function windowResized() {
@@ -145,14 +147,12 @@ function draw() {
  * SECTION 5: SIMULATION ENGINE
  */
 function runSimulation() {
-    // 1. Camera Logic
     cameraPos.x = lerp(cameraPos.x, myCar.pos.x - width / 2, SETTINGS.CAMERA_LERP);
     cameraPos.y = lerp(cameraPos.y, myCar.pos.y - height / 2, SETTINGS.CAMERA_LERP);
 
     push();
     translate(-cameraPos.x, -cameraPos.y);
 
-    // 2. Environment
     drawGrid();
     if (currentMapType === 'TRACK') {
         renderS_Track();
@@ -160,16 +160,11 @@ function runSimulation() {
         renderOpenWorld();
     }
 
-    // 3. Effects (Skids & Particles)
     updateEffects();
-
-    // 4. Car Physics
     myCar.process();
     myCar.render();
-
     pop();
 
-    // 5. HUD Overlay
     renderHUD();
 }
 
@@ -182,9 +177,10 @@ class Car {
         this.vel = createVector(0, 0);
         this.acc = createVector(0, 0);
         this.angle = 0;
+        this.steering = 0;
         this.stats = stats;
         this.isDrifting = false;
-        this.driftScore = 0;
+        this.driftAngle = 0;
     }
 
     process() {
@@ -194,76 +190,91 @@ class Car {
     }
 
     handleInput() {
-        // Thrust
+        // Linear acceleration
         if (keyIsDown(UP_ARROW) || keyIsDown(87)) {
             let force = p5.Vector.fromAngle(this.angle).mult(this.stats.speed);
             this.acc.add(force);
         }
-        // Braking/Reverse
         if (keyIsDown(DOWN_ARROW) || keyIsDown(83)) {
-            let force = p5.Vector.fromAngle(this.angle).mult(-this.stats.speed * 0.5);
+            let force = p5.Vector.fromAngle(this.angle).mult(-this.stats.speed * 0.6);
             this.acc.add(force);
         }
-        // Steering
-        let speedMult = map(this.vel.mag(), 0, 10, 0.5, 1.2);
-        if (keyIsDown(LEFT_ARROW) || keyIsDown(65)) this.angle -= this.stats.handling * speedMult;
-        if (keyIsDown(RIGHT_ARROW) || keyIsDown(68)) this.angle += this.stats.handling * speedMult;
+
+        // Improved steering with momentum
+        let targetSteer = 0;
+        if (keyIsDown(LEFT_ARROW) || keyIsDown(65)) targetSteer = -this.stats.handling;
+        if (keyIsDown(RIGHT_ARROW) || keyIsDown(68)) targetSteer = this.stats.handling;
+        
+        // Steering weight
+        this.steering = lerp(this.steering, targetSteer, 0.15);
+        
+        // Only turn if moving
+        let turnSpeedStat = map(this.vel.mag(), 0, 15, 0, 1.2);
+        this.angle += this.steering * turnSpeedStat;
     }
 
     applyPhysics() {
         this.vel.add(this.acc);
         
-        // Vectors for drift calculation
-        let forward = p5.Vector.fromAngle(this.angle);
-        let side = p5.Vector.fromAngle(this.angle + HALF_PI);
+        // Calculate Forward vs Lateral velocity
+        let forwardVec = p5.Vector.fromAngle(this.angle);
+        let rightVec = p5.Vector.fromAngle(this.angle + HALF_PI);
 
-        let fSpeed = this.vel.dot(forward);
-        let lSpeed = this.vel.dot(side);
+        let fVel = forwardVec.copy().mult(this.vel.dot(forwardVec));
+        let rVel = rightVec.copy().mult(this.vel.dot(rightVec));
 
-        // Apply Drift Friction
-        let newLateral = side.copy().mult(lSpeed * this.stats.driftGrip);
-        let newForward = forward.copy().mult(fSpeed);
+        // DRIFT PHYSICS LOGIC:
+        // Lateral friction is much lower than forward friction
+        // As speed increases, rear grip (lateral) decreases
+        let slipFactor = this.stats.driftFactor; 
+        if (rVel.mag() > 2) {
+            slipFactor *= 0.95; // Once sliding, it gets slippier
+            this.isDrifting = true;
+        } else {
+            this.isDrifting = false;
+        }
 
-        this.vel = newForward.add(newLateral);
-        this.vel.mult(SETTINGS.FRICTION);
+        this.vel = fVel.mult(SETTINGS.LONGITUDINAL_FRICTION).add(rVel.mult(slipFactor));
         this.pos.add(this.vel);
         this.acc.mult(0);
 
-        // Determine if drifting for money/skids
-        if (abs(lSpeed) > 0.8 && this.vel.mag() > 2) {
-            this.isDrifting = true;
+        // Visual effects for drifting
+        if (this.isDrifting && this.vel.mag() > 3) {
             userMoney += SETTINGS.MONEY_PER_DRIFT;
-            skidMarks.push(new SkidMark(this.pos.x, this.pos.y, this.angle));
-            // Add smoke particles
+            // Add skids for rear wheels
+            let offset = p5.Vector.fromAngle(this.angle + HALF_PI).mult(10);
+            skidMarks.push(new SkidMark(this.pos.x + offset.x, this.pos.y + offset.y, this.angle));
+            skidMarks.push(new SkidMark(this.pos.x - offset.x, this.pos.y - offset.y, this.angle));
+            
             if (frameCount % 2 === 0) {
-                particles.push(new Particle(this.pos.x, this.pos.y));
+                particles.push(new Particle(this.pos.x - forwardVec.x*20, this.pos.y - forwardVec.y*20));
             }
-        } else {
-            this.isDrifting = false;
         }
     }
 
     checkCollisions() {
         if (currentMapType === 'OPEN') {
             for (let o of worldObstacles) {
-                if (dist(this.pos.x, this.pos.y, o.x, o.y) < 60) {
-                    this.reset();
-                }
+                if (dist(this.pos.x, this.pos.y, o.x, o.y) < 60) this.reset();
             }
         } else {
             let onAsphalt = false;
             for (let n of trackNodes) {
-                if (dist(this.pos.x, this.pos.y, n.x, n.y) < SETTINGS.TRACK_WIDTH * 0.9) {
+                if (dist(this.pos.x, this.pos.y, n.x, n.y) < SETTINGS.TRACK_WIDTH * 0.95) {
                     onAsphalt = true;
+                    break;
                 }
             }
-            if (!onAsphalt) this.reset();
+            if (!onAsphalt) {
+                this.vel.mult(0.9); // Grass friction
+                if(this.vel.mag() < 1) this.reset();
+            }
             
-            // Check Finish
             let target = trackNodes[trackNodes.length - 1];
             if (dist(this.pos.x, this.pos.y, target.x, target.y) < 200) {
                 gameState = 'MENU';
-                alert("COURSE CLEAR!");
+                alert("RACE COMPLETE! +$1000");
+                userMoney += 1000;
             }
         }
     }
@@ -277,7 +288,9 @@ class Car {
     render() {
         push();
         translate(this.pos.x, this.pos.y);
-        rotate(this.angle);
+        // Visual "tilt" or oversteer look
+        let driftVisual = this.vel.heading() - this.angle;
+        rotate(this.angle + (this.isDrifting ? driftVisual * 0.2 : 0));
 
         if (this.stats.isGTR) {
             this.drawGTR();
@@ -292,32 +305,21 @@ class Car {
         stroke(0);
         strokeWeight(2);
         rect(0, 0, 50, 25, 5);
-        // Windows
         fill(40);
         rect(5, 0, 15, 20, 2);
     }
 
     drawGTR() {
-        // Detailed Pixel GT-R Logic
         noStroke();
-        fill(40); rect(2, 2, 54, 28, 4); // Shadow
-        fill(this.stats.color); rect(0, 0, 52, 26, 3); // Main Body
-        
-        // Roof/Windshield
-        fill(20); rect(4, 0, 22, 20, 2);
-        fill(50); rect(6, 0, 18, 18, 1);
-        
-        // Taillights (The signature 4 rounds)
+        fill(20, 100); rect(2, 4, 54, 28, 4); 
+        fill(this.stats.color); rect(0, 0, 52, 26, 3); 
+        fill(20); rect(4, 0, 22, 22, 2); 
+        fill(50); rect(6, 0, 18, 19, 1);
         fill(255, 0, 0);
         ellipse(-22, -8, 6, 6); ellipse(-22, 8, 6, 6);
-        ellipse(-16, -8, 4, 4); ellipse(-16, 8, 4, 4);
-        
-        // Spoiler
-        fill(60); rect(-24, 0, 4, 24);
-        
-        // Headlights
-        fill(255, 255, 200);
-        rect(22, -10, 6, 4); rect(22, 10, 6, 4);
+        fill(60); rect(-24, 0, 6, 26);
+        fill(255, 255, 150);
+        rect(24, -10, 8, 4); rect(24, 10, 8, 4);
     }
 }
 
@@ -331,9 +333,8 @@ class SkidMark {
         translate(this.x, this.y);
         rotate(this.a);
         noStroke();
-        fill(0, map(this.life, 0, SETTINGS.SKID_LIFE, 0, 120));
-        rect(-10, -10, 18, 5);
-        rect(-10, 10, 18, 5);
+        fill(0, map(this.life, 0, SETTINGS.SKID_LIFE, 0, 80));
+        rect(-10, 0, 15, 6);
         pop();
     }
 }
@@ -342,16 +343,17 @@ class Particle {
     constructor(x, y) {
         this.pos = createVector(x, y);
         this.vel = createVector(random(-1,1), random(-1,1));
-        this.alpha = 200;
+        this.alpha = 150;
+        this.size = random(5, 15);
     }
     update() {
         this.pos.add(this.vel);
-        this.alpha -= 4;
+        this.alpha -= 3;
     }
     display() {
         noStroke();
-        fill(200, this.alpha);
-        ellipse(this.pos.x, this.pos.y, 8);
+        fill(220, this.alpha);
+        ellipse(this.pos.x, this.pos.y, this.size);
     }
 }
 
@@ -362,17 +364,17 @@ function createTrack() {
     trackNodes = [];
     let startX = 0;
     let startY = 0;
-    for (let i = 0; i < 25; i++) {
-        let x = startX + i * 500;
-        let y = startY + sin(i * 0.8) * 900;
+    for (let i = 0; i < 30; i++) {
+        let x = startX + i * 600;
+        let y = startY + (i > 2 ? sin(i * 0.5) * 1200 : 0);
         trackNodes.push(createVector(x, y));
     }
 }
 
 function createOpenWorld() {
     worldObstacles = [];
-    for (let i = 0; i < 60; i++) {
-        worldObstacles.push(createVector(random(-3000, 3000), random(-3000, 3000)));
+    for (let i = 0; i < 80; i++) {
+        worldObstacles.push(createVector(random(-4000, 4000), random(-4000, 4000)));
     }
 }
 
@@ -380,47 +382,47 @@ function createOpenWorld() {
  * SECTION 8: DRAWING UTILITIES
  */
 function drawGrid() {
-    stroke(255, 15);
+    stroke(255, 10);
     strokeWeight(1);
-    for (let x = -5000; x < 15000; x += 300) line(x, -5000, x, 5000);
-    for (let y = -5000; y < 5000; y += 300) line(-5000, y, 15000, y);
+    let step = 400;
+    let startX = floor((cameraPos.x - 1000) / step) * step;
+    let startY = floor((cameraPos.y - 1000) / step) * step;
+    for (let x = startX; x < startX + width + 2000; x += step) line(x, startY, x, startY + height + 2000);
+    for (let y = startY; y < startY + height + 2000; y += step) line(startX, y, startX + width + 2000, y);
 }
 
 function renderS_Track() {
-    // Road Base
     noFill();
-    stroke(40);
-    strokeWeight(SETTINGS.TRACK_WIDTH);
+    stroke(30);
+    strokeWeight(SETTINGS.TRACK_WIDTH + 40);
     beginShape();
     for (let p of trackNodes) curveVertex(p.x, p.y);
     endShape();
 
-    // Red Borders
     stroke(200, 0, 0);
-    strokeWeight(SETTINGS.TRACK_WIDTH + 20);
+    strokeWeight(SETTINGS.TRACK_WIDTH + 10);
     beginShape();
     for (let p of trackNodes) curveVertex(p.x, p.y);
     endShape();
 
-    // Asphalt Top
     stroke(60);
-    strokeWeight(SETTINGS.TRACK_WIDTH - 10);
+    strokeWeight(SETTINGS.TRACK_WIDTH - 20);
     beginShape();
     for (let p of trackNodes) curveVertex(p.x, p.y);
     endShape();
 
-    // Finish Line
     let f = trackNodes[trackNodes.length - 1];
     fill(0, 255, 0);
     noStroke();
-    rect(f.x, f.y, 50, SETTINGS.TRACK_WIDTH);
+    rect(f.x, f.y, 40, SETTINGS.TRACK_WIDTH);
 }
 
 function renderOpenWorld() {
     for (let o of worldObstacles) {
-        fill(255, 120, 0);
+        fill(255, 100, 0);
         stroke(255);
-        triangle(o.x, o.y - 40, o.x - 25, o.y + 20, o.x + 25, o.y + 20);
+        strokeWeight(2);
+        triangle(o.x, o.y - 40, o.x - 20, o.y + 10, o.x + 20, o.y + 10);
     }
 }
 
@@ -441,56 +443,59 @@ function updateEffects() {
  * SECTION 9: MENU SYSTEM
  */
 function drawMenu() {
-    fill(255);
-    textAlign(CENTER);
-    textSize(60);
     fill(0, 255, 0);
+    textAlign(CENTER);
+    textSize(70);
     text("GARAGE", width/2, height/4);
     
-    textSize(20);
-    fill(200);
-    text("Selected Car: " + currentCarModel, width/2, height/4 + 50);
+    textSize(22);
+    fill(255);
+    text("ACTIVE VEHICLE: " + currentCarModel, width/2, height/4 + 60);
+    text("WALLET: $" + floor(userMoney), width/2, height/4 + 90);
 
-    drawButton(width/2, height/2 - 40, "CIRCUIT: S-TRACK", () => {
+    drawButton(width/2, height/2 - 20, "STAGE 1: CANYON DRIFT", () => {
         currentMapType = 'TRACK';
         createTrack();
         startSim();
     });
 
-    drawButton(width/2, height/2 + 40, "FREE ROAM: OPEN PARK", () => {
+    drawButton(width/2, height/2 + 60, "STAGE 2: INDUSTRIAL PARK", () => {
         currentMapType = 'OPEN';
         createOpenWorld();
         startSim();
     });
 
-    drawButton(width/2, height/2 + 120, "VEHICLE UPGRADES (SHOP)", () => {
+    drawButton(width/2, height/2 + 140, "THE SHOWROOM (SHOP)", () => {
         gameState = 'SHOP';
     });
 }
 
 function drawShop() {
+    background(5);
     fill(0, 255, 0);
     textSize(40);
     textAlign(CENTER);
-    text("THE SHOWROOM", width/2, 100);
+    text("VEHICLE SELECTION", width/2, 100);
 
-    let xOff = width/2 - 200;
+    let xOff = width/2 - 220;
     for (let key in CAR_CATALOG) {
         let car = CAR_CATALOG[key];
         let owned = ownedCars.includes(key);
+        let hover = mouseX > xOff && mouseX < xOff + 200 && mouseY > 200 && mouseY < 450;
         
-        fill(owned ? 40 : 20);
+        fill(hover ? 40 : 20);
         stroke(0, 255, 0);
-        rect(xOff + 100, 300, 180, 250, 10);
+        rect(xOff + 100, 325, 200, 300, 10);
         
         fill(255);
         noStroke();
-        textSize(18);
-        text(car.name, xOff + 100, 220);
-        textSize(14);
-        text(owned ? "OWNED" : "$" + car.price, xOff + 100, 400);
+        textSize(20);
+        text(car.name, xOff + 100, 230);
+        textSize(16);
+        fill(owned ? "#00ff00" : "#ffffff");
+        text(owned ? (currentCarModel === key ? "SELECTED" : "TAP TO EQUIP") : "BUY: $" + car.price, xOff + 100, 420);
 
-        if (mouseIsPressed && mouseX > xOff && mouseX < xOff + 200 && mouseY > 200 && mouseY < 450) {
+        if (hover && mouseIsPressed) {
             if (owned) {
                 currentCarModel = key;
             } else if (userMoney >= car.price) {
@@ -498,11 +503,12 @@ function drawShop() {
                 ownedCars.push(key);
                 currentCarModel = key;
             }
+            mouseIsPressed = false;
         }
-        xOff += 220;
+        xOff += 240;
     }
 
-    drawButton(width/2, height - 100, "BACK TO MENU", () => {
+    drawButton(width/2, height - 100, "RETURN TO GARAGE", () => {
         gameState = 'MENU';
     });
 }
@@ -516,41 +522,48 @@ function startSim() {
 
 function renderHUD() {
     textAlign(LEFT);
-    textSize(30);
+    textSize(28);
     fill(0, 255, 0);
     text("$" + floor(userMoney), 30, 50);
     
     textSize(14);
     fill(255);
-    text("VELOCITY: " + nfc(myCar.vel.mag() * 10, 1) + " KM/H", 30, 80);
-    text("MAP: " + currentMapType, 30, 100);
+    let speedKph = floor(myCar.vel.mag() * 12);
+    text("SPEED: " + speedKph + " KM/H", 30, 80);
+    if (myCar.isDrifting) {
+        fill(0, 255, 0);
+        text("DRIFTING +", 30, 100);
+    }
     
     textAlign(RIGHT);
-    text("PRESS 'P' TO RETURN TO GARAGE", width - 30, 50);
+    fill(150);
+    text("ESC / P: RETURN TO MENU", width - 30, 40);
+    text("WASD / ARROWS TO DRIVE", width - 30, 60);
 }
 
 function drawButton(x, y, label, action) {
-    let w = 300;
-    let h = 50;
+    let w = 350;
+    let h = 60;
     let hover = mouseX > x - w/2 && mouseX < x + w/2 && mouseY > y - h/2 && mouseY < y + h/2;
     
-    fill(hover ? 0 : 20, hover ? 255 : 200, 0);
-    rect(x, y, w, h, 5);
+    fill(hover ? 0 : 15, hover ? 255 : 220, 0);
+    stroke(hover ? 255 : 0);
+    rect(x, y, w, h, 8);
     
     fill(0);
     noStroke();
     textAlign(CENTER, CENTER);
-    textSize(16);
+    textSize(18);
     text(label, x, y);
 
     if (hover && mouseIsPressed) {
         action();
-        mouseIsPressed = false; // Debounce
+        mouseIsPressed = false;
     }
 }
 
 function keyPressed() {
-    if (key === 'p' || key === 'P') {
+    if (key === 'p' || key === 'P' || keyCode === ESCAPE) {
         gameState = 'MENU';
     }
 }
